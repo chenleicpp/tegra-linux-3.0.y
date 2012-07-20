@@ -95,6 +95,21 @@ static char *tegra_android_functions_accessory_adb[] = {
 };
 #endif
 
+//20100709, jm1.lee@lge.com, for LGE Android USB Driver interface [START]
+#if defined(CONFIG_MACH_STAR)
+static char *tegra_android_functions_lge[] = {
+#ifdef CONFIG_USB_ANDROID_ACM
+	"acm",
+#endif
+#ifdef CONFIG_USB_ANDROID_MASS_STORAGE
+	"usb_mass_storage",
+#endif
+#ifdef CONFIG_USB_ANDROID_ADB
+	"adb",
+#endif
+};
+#endif
+//20100709, jm1.lee@lge.com, for LGE Android USB Driver interface [END]
 static char *tegra_android_functions_all[] = {
 #ifdef CONFIG_USB_ANDROID_RNDIS
 	"rndis",
@@ -114,6 +129,19 @@ static char *tegra_android_functions_all[] = {
 };
 
 static struct android_usb_product tegra_android_products[] = {
+//20100709, jm1.lee@lge.com, for LGE Android USB Driver interface [START]
+#if defined(CONFIG_MACH_STAR)
+	[0] = {
+		.product_id = 0x618E,
+		.num_functions = ARRAY_SIZE(tegra_android_functions_lge),
+		.functions = tegra_android_functions_lge,
+	},
+	[1] = {
+		.product_id = 0x6000,
+		.num_functions = ARRAY_SIZE(tegra_android_functions_ums),
+		.functions = tegra_android_functions_ums,
+	},
+#else
 	[0] = {
 		.product_id = 0x7100,
 		.num_functions = ARRAY_SIZE(tegra_android_functions_ums),
@@ -124,6 +152,8 @@ static struct android_usb_product tegra_android_products[] = {
 		.num_functions = ARRAY_SIZE(tegra_android_functions_ums_adb),
 		.functions = tegra_android_functions_ums_adb,
 	},
+#endif
+//20100709, jm1.lee@lge.com, for LGE Android USB Driver interface [END]
 	[2] = {
 		.product_id = 0x7102,
 		.num_functions = ARRAY_SIZE(tegra_android_functions_rndis),
@@ -152,9 +182,17 @@ static struct android_usb_product tegra_android_products[] = {
 
 static char *harmony_dev = "NVIDIA Harmony";
 static char *ventana_dev = "NVIDIA Ventana";
+//20100710, jm1.lee@lge.com, for LGE Android USB Driver interface [START]
+#if defined(CONFIG_MACH_STAR)
+static char *generic_dev = "LGE Android Phone";
+#else
 static char *generic_dev = "NVIDIA Tegra 2";
+#endif
+//20100710, jm1.lee@lge.com, for LGE Android USB Driver interface [END]
 
 static struct android_usb_platform_data tegra_android_platform = {
+//20100709, jm1.lee@lge.com, for LGE Android USB Driver interface [START]
+#if 0
 	.vendor_id = 0x955,
 	.product_id = 0x7100,
 	.manufacturer_name = "NVIDIA",
@@ -162,6 +200,16 @@ static struct android_usb_platform_data tegra_android_platform = {
 	.products = tegra_android_products,
 	.num_functions = ARRAY_SIZE(tegra_android_functions_all),
 	.functions = tegra_android_functions_all,
+#else
+	.vendor_id = 0x1004,
+	.product_id = 0x618E,
+	.manufacturer_name = "LG Electronics",
+	.num_products = ARRAY_SIZE(tegra_android_products),
+	.products = tegra_android_products,
+	.num_functions = ARRAY_SIZE(tegra_android_functions_lge),
+	.functions = tegra_android_functions_lge,
+#endif
+//20100709, jm1.lee@lge.com, for LGE Android USB Driver interface [END]
 };
 static struct platform_device tegra_android_device = {
 	.name = "android_usb",
@@ -172,9 +220,16 @@ static struct platform_device tegra_android_device = {
 };
 #ifdef CONFIG_USB_ANDROID_MASS_STORAGE
 static struct usb_mass_storage_platform_data tegra_usb_fsg_platform = {
+//20100710, change mass storage device information [START]
+#if defined (CONFIG_MACH_STAR)
+	.vendor = "LGE",
+	.product = "Android Phone",
+#else
 	.vendor = "NVIDIA",
 	.product = "Tegra 2",
-	.nluns = 1,
+#endif
+//20100710, change mass storage device information [END]
+	.nluns = 2,
 	.bulk_size = 16384,
 };
 static struct platform_device tegra_usb_fsg_device = {
@@ -204,7 +259,7 @@ static struct platform_device tegra_usb_rndis_device = {
 #endif
 
 static struct platform_device *platform_devices[] = {
-#ifdef CONFIG_USB_ANDROID
+#if defined(CONFIG_USB_ANDROID) || defined(CONFIG_USB_SUPPORT_LGE_ANDROID_GADGET)
 #ifdef CONFIG_USB_ANDROID_RNDIS
 	&tegra_usb_rndis_device,
 #endif
@@ -344,7 +399,7 @@ static void __init do_system_init(bool standard_i2c, bool standard_spi)
 
 	NvRmQueryChipUniqueId(s_hRmGlobal, sizeof(chip_id), (void*)chip_id);
 	snprintf(serial, sizeof(serial), "%08x%08x", chip_id[1], chip_id[0]);
-#ifdef CONFIG_USB_ANDROID
+#if defined(CONFIG_USB_ANDROID) || defined(CONFIG_USB_SUPPORT_LGE_ANDROID_GADGET)
 	tegra_android_platform.serial_number = kstrdup(serial, GFP_KERNEL);
 #endif
 	system_serial_low = chip_id[0];
@@ -487,12 +542,20 @@ static void __init tegra_ventana_init(void)
 
 static void __init tegra_generic_init(void)
 {
-#ifdef CONFIG_USB_ANDROID
+#if defined(CONFIG_USB_ANDROID) || defined(CONFIG_USB_SUPPORT_LGE_ANDROID_GADGET)
 	tegra_android_platform.product_name = generic_dev;
 #endif
 	do_system_init(true, true);
         register_spi_ipc_devices();
 	tegra_setup_bluesleep_csr();
+}
+
+extern void __init tegra_allocate_memory_regions(void);
+static void __init tegra_map_io(void)
+{
+	tegra_map_common_io();
+
+	tegra_allocate_memory_regions();
 }
 
 MACHINE_START(VENTANA, "NVIDIA Ventana Development System")
@@ -522,6 +585,6 @@ MACHINE_START(TEGRA_GENERIC, "Tegra 2 Development System")
 	.init_irq       = tegra_init_irq,
 	.init_early     = tegra_init_early,
 	.init_machine   = tegra_generic_init,
-	.map_io         = tegra_map_common_io,
+	.map_io         = tegra_map_io,
 	.timer          = &tegra_timer,
 MACHINE_END

@@ -507,15 +507,20 @@ typedef struct NvAudioFxIoChangeMessageRec
     NvAudioFxConnectionDescriptor Connection;
 } NvAudioFxIoChangeMessage;
 
+// 20110223, , media server restart 2 [start]
  /**
  * @brief Initializes and opens the AudioFX Mixer.
  *
- * @retval NvAudioFxMixerHandle A non-NULL value will be returned if the mixer
- * is successfully opened.
+  * @param phMixer pointer to Mixer Handle.  This API
+  * opens a new AudioFx Mixer Handle and returns it
+  * through phMixer.
+  *
+  * @retval NvSuccess Indicates the operation succeeded.
  */
 
- NvAudioFxMixerHandle NvddkAudioFxMixerOpen(
-    void  );
+ NvError NvddkAudioFxMixerOpen(
+    NvAudioFxMixerHandle * phMixer );
+// 20110223, , media server restart 2 [end]
 
  /**
  * @brief Closes the AudioFX Mixer. This function frees the resources associated
@@ -624,7 +629,9 @@ typedef struct NvAudioFxIoChangeMessageRec
 
 typedef struct NvddkAudioFxFxnTableRec
 {
-    NvAudioFxMixerHandle (*MixerOpen)(void);
+// 20110223, , media server restart 2 [start]
+    NvError (*MixerOpen)(NvAudioFxMixerHandle* phMixer);
+// 20110223, , media server restart 2 [end]
     void (*MixerClose)(NvAudioFxMixerHandle hMixer);
     NvAudioFxObjectHandle (*MixerCreateObject)(NvAudioFxMixerHandle hMixer, NvObjectId Id);
     void (*MixerDestroyObject)(NvAudioFxObjectHandle hObject);

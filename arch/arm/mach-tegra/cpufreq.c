@@ -67,7 +67,7 @@ static void tegra_cpufreq_hotplug(NvRmPmRequest req)
 	smp_rmb();
 	if (disable_hotplug)
 		return;
-
+	
 	if (req & NvRmPmRequest_CpuOnFlag) {
 		struct cpumask m;
 
@@ -143,7 +143,7 @@ static int tegra_cpufreq_dfsd(void *arg)
 	last_rate = rate;
 
 	NvRmDfsSetState(rm_cpufreq, NvRmDfsRunState_ClosedLoop);
-	set_freezable_with_signal();
+	set_freezable();
 
 	while (!kthread_should_stop() && !(req & NvRmPmRequest_ExitFlag)) {
 

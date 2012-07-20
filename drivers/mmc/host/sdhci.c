@@ -1392,8 +1392,7 @@ static void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		if ((ios->timing == MMC_TIMING_UHS_SDR50) ||
 		    (ios->timing == MMC_TIMING_UHS_SDR104) ||
 		    (ios->timing == MMC_TIMING_UHS_DDR50) ||
-		    (ios->timing == MMC_TIMING_UHS_SDR25) ||
-		    (ios->timing == MMC_TIMING_UHS_SDR12))
+		    (ios->timing == MMC_TIMING_UHS_SDR25))
 			ctrl |= SDHCI_CTRL_HISPD;
 
 		ctrl_2 = sdhci_readw(host, SDHCI_HOST_CONTROL2);
@@ -2296,6 +2295,15 @@ out:
 
 #ifdef CONFIG_PM
 
+int sdhci_cancel_delayed_work(struct sdhci_host *host, pm_message_t state)
+{
+	int ret;
+
+	ret = mmc_cancel_delayed_work(host->mmc);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(sdhci_cancel_delayed_work);
+
 int sdhci_suspend_host(struct sdhci_host *host, pm_message_t state)
 {
 	int ret;
@@ -2305,9 +2313,8 @@ int sdhci_suspend_host(struct sdhci_host *host, pm_message_t state)
 	/* Disable tuning since we are suspending */
 	if (host->version >= SDHCI_SPEC_300 && host->tuning_count &&
 	    host->tuning_mode == SDHCI_TUNING_MODE_1) {
+		del_timer_sync(&host->tuning_timer);
 		host->flags &= ~SDHCI_NEEDS_RETUNING;
-		mod_timer(&host->tuning_timer, jiffies +
-			host->tuning_count * HZ);
 	}
 
 	ret = mmc_suspend_host(host->mmc);
@@ -2603,8 +2610,17 @@ int sdhci_add_host(struct sdhci_host *host)
 	}
 
 	if (host->quirks & SDHCI_QUIRK_RUNTIME_DISABLE) {
+#if defined (CONFIG_LGE_BCM432X_PATCH)
+		if(mmc->index != 0)
+#endif /* CONFIG_LGE_BCM432X_PATCH */
 		mmc->caps |= MMC_CAP_DISABLE;
+                /* 20110104 taewan.kim@lge.com sync from LU3000 [START] */
+#if defined(CONFIG_MACH_STAR)
+		mmc_set_disable_delay(mmc, msecs_to_jiffies(100));
+#else
 		mmc_set_disable_delay(mmc, msecs_to_jiffies(50));
+#endif
+                /* 20110104 taewan.kim@lge.com sync from LU3000 [END] */
 	}
 
 	/* UHS-I mode(s) supported by the host controller. */

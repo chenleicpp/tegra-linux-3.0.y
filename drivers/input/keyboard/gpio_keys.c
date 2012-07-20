@@ -474,7 +474,7 @@ static int __devinit gpio_keys_probe(struct platform_device *pdev)
 	input_set_drvdata(input, ddata);
 
 	input->name = pdata->name ? : pdev->name;
-	input->phys = "gpio-keys/input0";
+	input->phys = "tegra-kbc/input0";
 	input->dev.parent = &pdev->dev;
 	input->open = gpio_keys_open;
 	input->close = gpio_keys_close;
@@ -626,7 +626,7 @@ static struct platform_driver gpio_keys_device_driver = {
 	.probe		= gpio_keys_probe,
 	.remove		= __devexit_p(gpio_keys_remove),
 	.driver		= {
-		.name	= "gpio-keys",
+		.name	= "tegra-kbc",
 		.owner	= THIS_MODULE,
 #ifdef CONFIG_PM
 		.pm	= &gpio_keys_pm_ops,
@@ -650,4 +650,4 @@ module_exit(gpio_keys_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Phil Blundell <pb@handhelds.org>");
 MODULE_DESCRIPTION("Keyboard driver for CPU GPIOs");
-MODULE_ALIAS("platform:gpio-keys");
+MODULE_ALIAS("platform:tegra-kbc");

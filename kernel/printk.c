@@ -154,6 +154,19 @@ static int log_buf_len = __LOG_BUF_LEN;
 static unsigned logged_chars; /* Number of chars produced since last read+clear operation */
 static int saved_console_loglevel = -1;
 
+/* 20100916 taewan.kim@lge.com set default loglevel [START] */
+#if defined(CONFIG_MACH_STAR)
+void set_default_loglevel()
+{
+    console_printk[0] = DEFAULT_CONSOLE_LOGLEVEL;
+    console_printk[1] = DEFAULT_MESSAGE_LOGLEVEL;
+    console_printk[2] = MINIMUM_CONSOLE_LOGLEVEL;
+    console_printk[3] = DEFAULT_CONSOLE_LOGLEVEL;
+}
+EXPORT_SYMBOL(set_default_loglevel);
+#endif
+/* 20100916 taewan.kim@lge.com set default loglevel [END] */
+
 #ifdef CONFIG_KEXEC
 /*
  * This appends the listed symbols to /proc/vmcoreinfo
@@ -369,8 +382,10 @@ static int check_syslog_permissions(int type, bool from_file)
 			return 0;
 		/* For historical reasons, accept CAP_SYS_ADMIN too, with a warning */
 		if (capable(CAP_SYS_ADMIN)) {
-			WARN_ONCE(1, "Attempt to access syslog with CAP_SYS_ADMIN "
-				 "but no CAP_SYSLOG (deprecated).\n");
+			printk_once(KERN_WARNING "%s (%d): "
+				 "Attempt to access syslog with CAP_SYS_ADMIN "
+				 "but no CAP_SYSLOG (deprecated).\n",
+				 current->comm, task_pid_nr(current));
 			return 0;
 		}
 		return -EPERM;

@@ -20,6 +20,10 @@ obj-y					+= platsmp.o localtimer.o headsmp.o
 obj-$(CONFIG_ARCH_TEGRA_2x_SOC)		+= headsmp-t2.o
 endif
 obj-$(CONFIG_ARCH_TEGRA_2x_SOC)		+= tegra2_save.o
+
+# gps gpio  2010/05/24
+obj-$(CONFIG_MACH_STAR_REV_F)		+= tegra_gps.o
+
 obj-$(CONFIG_ARCH_TEGRA_2x_SOC)		+= fuse-cache.o
 obj-$(CONFIG_MACH_TEGRA_GENERIC)	+= board-generic.o
 obj-$(CONFIG_CPU_FREQ)			+= cpufreq.o
@@ -56,3 +60,8 @@ obj-$(CONFIG_TEGRA_FUSE)		+= sysfs-fuse.o
 obj-$(CONFIG_TEGRA_ODM_VIBRATE)		+= vibrate.o
 obj-$(CONFIG_TEGRA_AES_USER)		+= nvaes_user.o
 obj-$(CONFIG_MACH_VENTANA)		+= board-ventana-wifi.o
+#LGE_CHANGE[] 2010-03-30, debug message beautifier
+obj-$(CONFIG_LPRINTK)			+=lprintk.o
+
+#20100602, pmic on/off test
+obj-$(CONFIG_STAR_PMIC)			+=pmic.o

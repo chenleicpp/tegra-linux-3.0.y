@@ -149,7 +149,16 @@ void arm_machine_restart(char mode, const char *cmd)
 	flush_cache_all();
 
 	/* Turn off caching */
+//20110124, , fix lockup during reset [START]
+#if defined(CONFIG_MACH_STAR)
+    if ( cmd == NULL )
+	    cpu_proc_fin();
+    else if ( *cmd != 'p' )
 	cpu_proc_fin();
+#else
+	cpu_proc_fin();
+#endif
+//20110124, , fix lockup during reset [END]
 
 	/* Push out any further dirty data, and ensure cache is empty */
 	flush_cache_all();
@@ -232,6 +241,9 @@ void cpu_idle(void)
 #endif
 
 			local_irq_disable();
+#ifdef CONFIG_PL310_ERRATA_769419
+			wmb();
+#endif
 			if (hlt_counter) {
 				local_irq_enable();
 				cpu_relax();

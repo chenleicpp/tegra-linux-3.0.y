@@ -282,24 +282,8 @@ extern "C"
 /// Default low corners for core and dedicated CPU voltages
 #define NVRM_AP20_LOW_CORE_MV (950)
 #define NVRM_AP20_LOW_CPU_MV (750)
-
 /// Core voltage in suspend
 #define NVRM_AP20_SUSPEND_CORE_MV (1000)
-
-/// Core and CPU voltage reliability requirements for some skus
-#define NVRM_AP20_RELIABILITY_CORE_MV(sku) \
-       ((((sku) == 23) || \
-         ((sku) == 24) || \
-         ((sku) == 20) || \
-         ((sku) == 27) || \
-         ((sku) == 28)) ? 1000 : 0)
-
-#define NVRM_AP20_RELIABILITY_CPU_MV(sku) \
-       ((((sku) == 23) || \
-         ((sku) == 24) || \
-         ((sku) == 20) || \
-         ((sku) == 27) || \
-         ((sku) == 28)) ? 850 : 0)
 
 /*****************************************************************************/
 
@@ -386,6 +370,17 @@ NvRmPrivAp20DttPolicyUpdate(
     NvRmDeviceHandle hRmDevice,
     NvS32 TemperatureC,
     NvRmDtt* pDt);
+
+//20101121 , HW power off in thermal limit [START]
+#if defined(CONFIG_MACH_STAR)
+void
+NvRmPrivStarDttPolicyUpdate(
+    NvRmDeviceHandle hRmDevice,
+    NvS32 TemperatureC,
+    NvRmDtt* pDt);
+
+#endif
+//20101121 , HW power off in thermal limit [END]
 
 /**
  * Throttles DFS target clocks.

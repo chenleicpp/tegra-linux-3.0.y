@@ -43,6 +43,13 @@
 #include <linux/i2c/atmel_maxtouch.h>
 #endif
 
+//20100419  for headset detetion [LGE_START]
+#if defined(CONFIG_MACH_STAR)
+#include <linux/switch.h>	//20100419  for Headset Detection [LGE]
+#endif /* CONFIG_MACH_STAR */
+//20100419  for headset detection [LGE_END]
+
+#include <asm/setup.h>
 #include <mach/iomap.h>
 #include <mach/io.h>
 #include <mach/pinmux.h>
@@ -83,7 +90,25 @@
 #include <linux/input.h>
 #endif
 
+//20100830, gunwoo1.kim, soft reset [START]
+#if defined(CONFIG_INPUT_KEYRESET)
+#include <linux/keyreset.h>
+#endif
+//20100830, gunwoo1.kim, soft reset [END]
+
+//20100724  for poweroff leakage [LGE_START]
+#include "odm_kit/star/adaptations/pmu/max8907/max8907_supply_info_table.h"
+#include <linux/delay.h>
+//20100724  for poweroff leakage [LGE_END]
+#include <linux/rtc.h>
+
+#if 1
+extern void NvRmPrivDvsStop(void);
+extern void star_emergency_restart(const char *domain, int timeout);
+#endif
+
 extern NvBool IsBoardTango(void);
+
 NvRmGpioHandle s_hGpioGlobal;
 
 struct debug_port_data {
@@ -121,6 +146,82 @@ static struct platform_device debug_uart = {
 		.platform_data = debug_uart_platform,
 	},
 };
+
+#define TEGRA_EMC_MRW          0x00e8
+static void __iomem *emc = IO_ADDRESS(TEGRA_EMC_BASE);
+static inline void emc_writel(u32 val, unsigned long addr)
+{
+	writel(val, emc + addr);
+}
+
+/* read LPDDR2 memory modes */
+void tegra_emc_write_mrw(unsigned long addr)
+{
+	emc_writel(0x90000, TEGRA_EMC_MRW);    
+	printk("Sending 0xB0 to TEGRA_EMC_MRW\n");
+	emc_writel(0x900B0, TEGRA_EMC_MRW);
+	printk("Sending 0xE0 to TEGRA_EMC_MRW\n");
+	emc_writel(0x900E0, TEGRA_EMC_MRW);
+	printk("Sending 0x90 to TEGRA_EMC_MRW\n");
+	emc_writel(0x90090, TEGRA_EMC_MRW);
+	/* Sending the test op code per Hynix FAE requested. 
+	   0xBD - reducing self-refresh rate from 30 us to 20 us.
+	   */
+	printk("Sending 0xBD to TEGRA_EMC_MRW\n");
+	emc_writel(0x900BD, TEGRA_EMC_MRW);
+}
+
+#if defined (CONFIG_MACH_STAR)
+extern void write_cmd_reserved_buffer(unsigned char *buf, size_t len);
+#endif
+
+typedef enum
+{       
+        RESET_COLD_BOOT,
+        RESET_NORMAL_RESET,      
+#if defined (CONFIG_STAR_HIDDEN_RESET)
+        RESET_HIDDEN_RESET,      
+#endif        
+        RESET_PANIC_RESET,  
+} RESET_MODE_TYPE;
+
+int reset_status = RESET_COLD_BOOT;
+
+static void reset_status_setup(char *str)
+{
+	switch (str[0])
+	{
+		case 'w':
+			reset_status = RESET_NORMAL_RESET;
+			printk("reset_status_setup = RESET_NORMAL_RESET\n");
+			break;
+#if defined (CONFIG_STAR_HIDDEN_RESET)			
+		case 'h':	
+			reset_status = RESET_HIDDEN_RESET;
+			printk("reset_status_setup = RESET_HIDDEN_RESET\n");
+			break;
+#endif			
+		case 'p':
+			reset_status = RESET_PANIC_RESET;
+			printk("reset_status_setup = RESET_PANIC_RESET\n");
+			break;
+		default :
+			reset_status = RESET_COLD_BOOT;
+			printk("reset_status_setup = RESET_COLD_BOOT\n");
+			break;
+	}
+
+
+}
+__setup("rs=", reset_status_setup);
+
+int get_reset_status()
+{
+	return reset_status;
+}
+
+
+EXPORT_SYMBOL(get_reset_status);
 
 static void __init tegra_setup_debug_uart(void)
 {
@@ -213,6 +314,33 @@ static void tegra_debug_port_resume(void)
 				uart_debug_port.nr_pins, TEGRA_TRI_NORMAL);
 }
 
+//20100830, gunwoo1.kim, soft reset [START]
+#if defined(CONFIG_INPUT_KEYRESET)
+static int star_reset_keys_up[] = { 0 };
+
+static struct keyreset_platform_data star_reset_keys_pdata = {
+    .keys_up = star_reset_keys_up,
+    .keys_down = {
+        KEY_POWER,
+        KEY_VOLUMEUP,
+        0
+    },
+};
+
+struct platform_device star_reset_keys_device = {
+    .name = KEYRESET_NAME,
+    .dev.platform_data = &star_reset_keys_pdata,
+};
+#endif
+//20100830, gunwoo1.kim, soft reset [END]
+
+// 20101111 BT:  - For the BD Address Read /write [Start]
+struct platform_device star_bd_address_device = {
+	.name = "star_bd_address",
+	.id = -1,
+};
+// 20101111 BT:  - For the BD Address Read /write [End]
+
 
 #ifdef CONFIG_MMC_SDHCI_TEGRA
 extern struct tegra_nand_platform tegra_nand_plat;
@@ -220,6 +348,9 @@ static struct tegra_sdhci_platform_data tegra_sdhci_platform[] = {
 	[0] = {
 		.bus_width = 4,
 		.debounce = 5,
+// 20100827  [WLAN] NVIDIA bug fix - lock up after suspend [START]
+		.is_always_on = 1,
+// 20100827  [WLAN] NVIDIA bug fix - lock up after suspend [END]
 	},
 	[1] = {
 		.bus_width = 4,
@@ -522,9 +653,10 @@ static void __init tegra_setup_hsuart(void)
 		if (i==dbg_id)
 			continue;
 
-		if (odm_table[i] == 0)
+//, skip registering with useless uart port [START]
+       if ( 0 == odm_table[i] )
 			continue;
-
+//, skip registering with useless uart port [END]
 		plat = &tegra_uart_platform[i];
 
 		snprintf(name, sizeof(name), "%s.%d",
@@ -919,12 +1051,26 @@ static struct platform_device tegra_nvec_device = {
 	.id = -1,
 };
 #endif
-#if defined(CONFIG_TEGRA_BATTERY_NVEC) || defined(CONFIG_TEGRA_BATTERY_ODM)
+
+//20100527, , For Star Battery Driver [START]
+#if (defined(CONFIG_MACH_STAR) && defined(CONFIG_STAR_BATTERY_CHARGER))
+#ifndef CONFIG_TEGRA_BATTERY_ODM
+#error "You have to set defconfig(Device Drivers -> Power supply class support -> NVIDIA Tegra ODM kit battery driver)"
+#else
+static struct platform_device star_battery_charger_device =
+{
+    .name = "star_battery_charger",
+    .id   = -1,
+};
+#endif // error
+#elif defined(CONFIG_TEGRA_BATTERY_NVEC) || defined(CONFIG_TEGRA_BATTERY_ODM)
 static struct platform_device tegra_battery_device = {
 	.name = "tegra_battery",
 	.id = -1,
 };
-#endif
+#endif // CONFIG_MACH_STAR
+//20100527, , For Star Battery Driver [END]
+
 #ifdef CONFIG_REGULATOR_TEGRA
 static struct regulator_consumer_supply pex_clk_consumers[] = {
 	[0] = {
@@ -1005,7 +1151,7 @@ static struct tegra_regulator_entry tegra_regulators[] = {
 		.nr_consumers = ARRAY_SIZE(pex_clk_consumers),
 	},
 	[1] = {
-		.guid = NV_ODM_GUID('b','c','m','_','4','3','2','9'),
+		.guid = NV_ODM_GUID('b','l','u','t','o','o','t','h'),
 		.name = "lbee9qmb_vdd",
 		.id = 1,
 		.consumers = lbee9qmb_consumers,
@@ -1119,10 +1265,54 @@ static struct platform_device lbee9qmb_device = {
 		.platform_data = &lbee9qmb_platform,
 	},
 };
+
+#ifdef BRCM_BT_WAKE
+static struct platform_device lbee9qmb_btwake_device = {
+	.name = "lbee9qmb-rfkill_btwake",
+	.dev = {
+		.platform_data = &lbee9qmb_platform,
+	},
+};
+#endif
+
 static noinline void __init tegra_setup_rfkill(void)
 {
 	const NvOdmPeripheralConnectivity *con;
 	unsigned int i;
+/* 20100815  for bluetooth on [LGE_START] */
+
+	con = NvOdmPeripheralGetGuid(NV_ODM_GUID('b','l','u','t','o','o','t','h'));
+	if (!con)
+		return;
+
+		for (i=0; i<con->NumAddress; i++) {
+		if (con->AddressList[i].Interface == NvOdmIoModule_Gpio) {
+				int nr_gpio = con->AddressList[i].Instance * 8 +
+					con->AddressList[i].Address;
+				lbee9qmb_platform.gpio_reset = nr_gpio;
+				if (platform_device_register(&lbee9qmb_device))
+					pr_err("%s: registration failed\n", __func__);
+
+#ifdef BRCM_BT_WAKE
+			int btwake_gpio = con->AddressList[3].Instance * 8 +
+				con->AddressList[3].Address;
+			pr_err("BRCM_LPM: GOT BT wake gpio=%x",btwake_gpio);
+			lbee9qmb_platform.gpio_btwake = btwake_gpio;
+#endif
+#ifdef BRCM_HOST_WAKE
+			int hostwake_gpio = con->AddressList[2].Instance * 8 +
+				con->AddressList[2].Address;
+			pr_err("BRCM_LPM: GOT HOST wake gpio=%x",hostwake_gpio);
+			lbee9qmb_platform.gpio_hostwake = hostwake_gpio;
+#endif		
+#ifdef BRCM_BT_WAKE
+			if (platform_device_register(&lbee9qmb_btwake_device))
+			pr_err("%s: registration failed\n", __func__);
+#endif		
+                return;
+        }
+	}
+/* ORIGINAL
 	lbee9qmb_platform.delay=5;
 	lbee9qmb_platform.gpio_pwr=-1;
 	if ((con = NvOdmPeripheralGetGuid(NV_ODM_GUID('l','b','e','e','9','q','m','b'))))
@@ -1162,6 +1352,8 @@ static noinline void __init tegra_setup_rfkill(void)
                 return;
         }
         return;
+ORIGINAL */
+/* 20100815  for bluetooth on [LGE_END] */
 }
 #else
 static void tegra_setup_rfkill(void) { }
@@ -1173,6 +1365,54 @@ static struct platform_device tegra_touch_device = {
 	.id = -1,
 };
 #endif
+
+#ifdef CONFIG_TOUCHSCREEN_ANDROID_VIRTUALKEYS
+static ssize_t star_virtual_keys_show(struct kobject *kobj,
+               struct kobj_attribute *attr, char *buf)
+{
+       /* Dimensions, 80x80, y starts at 830
+       center: x: menu: 75, home: 185, back: 295, search 405, y: 910 */
+       return sprintf(buf,
+                       __stringify(EV_KEY) ":" __stringify(KEY_MENU)  ":75:910:110:110"
+                       ":" __stringify(EV_KEY) ":" __stringify(KEY_HOME)   ":185:910:110:110"
+                       ":" __stringify(EV_KEY) ":" __stringify(KEY_BACK)   ":295:910:110:110"
+                       ":" __stringify(EV_KEY) ":" __stringify(KEY_SEARCH) ":405:910:110:110"
+                       "\n");
+}
+
+static struct kobj_attribute star_virtual_keys_attr = {
+       .attr = {
+               .name = "virtualkeys.nvodm_touch",
+               .mode = S_IRUGO,
+       },
+       .show = &star_virtual_keys_show,
+};
+
+static struct attribute *star_properties_attrs[] = {
+       &star_virtual_keys_attr.attr,
+       NULL
+};
+
+static struct attribute_group star_properties_attr_group = {
+       .attrs = star_properties_attrs,
+};
+
+static int __init star_init_android_virtualkeys(void)
+{
+	struct kobject *properties_kobj;
+
+	properties_kobj = kobject_create_and_add("board_properties", NULL);
+	if (properties_kobj) {
+		if (sysfs_create_group(properties_kobj,
+					&star_properties_attr_group))
+			pr_err("failed to create board_properties\n");
+	} else {
+		pr_err("failed to create board_properties\n");
+	}
+}
+#endif
+
+// 20100917 jay.sim@lge.com, Temp for Sensor Modulazation --
 
 #ifdef CONFIG_TOUCHSCREEN_PANJIT_I2C
 static struct panjit_i2c_ts_platform_data panjit_data = {
@@ -1250,10 +1490,77 @@ static int __init ventana_touch_init_atmel(void)
 }
 #endif
 
-#ifdef CONFIG_INPUT_TEGRA_ODM_ACCEL
-static struct platform_device tegra_accelerometer_device = {
+// 20100927   Synaptics OneTouch support [START]
+#ifdef CONFIG_ONETOUCH_TEGRA_ODM
+static struct platform_device tegra_onetouch_device = {
+	.name = "tegra_onetouch",
+	.id = -1,
+};
+#endif
+// 20100927   Synaptics OneTouch support [END]
+
+
+#ifdef CONFIG_STAR_GYRO_ACCEL
+static struct platform_device tegra_accelerometer_device =
+{
 	.name = "tegra_accelerometer",
 	.id   = -1,
+};
+
+static struct platform_device tegra_gyro_accel_device =
+{
+	.name = "tegra_gyro_accel",
+	.id   = -1,
+};
+#endif
+
+//20100526 , For Compass Driver [start]
+#ifdef CONFIG_STAR_COMPASS
+static struct platform_device star_compass_device =
+{
+	.name = "tegra_compass",
+	.id	  = -1,
+};
+#endif
+
+// 20100917 jay.sim@lge.com, Temp for Sensor Modulazation --
+#ifdef CONFIG_STAR_SENSORS
+static struct platform_device tegra_accelerometer_device =
+{
+	.name = "tegra_accelerometer",
+	.id   = -1,
+};
+
+static struct platform_device tegra_gyro_accel_device =
+{
+	.name = "tegra_gyro_accel",
+	.id   = -1,
+};
+
+static struct platform_device star_compass_device =
+{
+	.name = "tegra_compass",
+	.id	  = -1,
+};
+#endif
+// 20100917 , Temp for Sensor Modulazation --
+
+
+//20100526 , For Vibrator Driver [start]
+#ifdef CONFIG_STAR_VIBRATOR
+static struct platform_device star_vib_device =
+{
+    .name = "star_vib_name",
+    .id   = -1,
+};
+#endif
+//20100526 , For Vibrator Driver [end]
+
+#ifdef CONFIG_STAR_HALL //20100903 
+static struct platform_device star_hall_device =
+{
+    .name = "star_hall",
+    .id   = -1,
 };
 #endif
 
@@ -1263,6 +1570,116 @@ static struct platform_device tegra_scrollwheel_device = {
 	.id   = -1,
 };
 #endif
+
+#ifdef CONFIG_TEGRA_ODM_VIBRATE
+static struct platform_device tegra_vibrator_device = {
+	.name = "tegra_vibrator",
+	.id = -1,
+};
+#endif
+//20100401  MUIC driver [START]
+#if defined(CONFIG_MACH_STAR)
+static struct platform_device star_muic_device =
+{
+    .name = "star_muic",
+    .id   = -1,
+};
+#endif
+// 20100401  MUIC driver [END]
+// 20100526  Proximity driver [START]
+#ifdef CONFIG_STAR_PROXIMITY
+static struct platform_device star_proximity_device =
+{
+    .name = "star_proximity",
+    .id   = -1,
+};
+#endif
+// 20100526  Proximity driver [END]
+
+//20100413, , star powerkey [START]
+#ifdef CONFIG_MACH_STAR
+#ifdef CONFIG_STAR_POWERKEY
+static struct platform_device star_powerkey =
+{
+    .name = "star_powerkey",
+    .id   = -1,
+};
+#endif
+
+
+//20100611, , touch LED [START]
+#ifdef CONFIG_STAR_TOUCH_LED
+static struct platform_device star_touch_led =
+{
+    .name = "star_touch_led",
+    .id   = -1,
+};
+
+#endif
+//20100611, , touch LED [END]
+
+//20100702, , HDMI regulator [START]
+#ifdef CONFIG_STAR_HDMI_REG
+static struct platform_device star_hdmi_reg =
+{
+    .name = "star_hdmi_reg",
+    .id   = -1,
+};
+#endif
+//20100702, , HDMI regulator [END]
+
+#endif
+//20100413, , star powerkey [END]
+
+
+//20100419  headset detection [LGE_START]
+#if defined(CONFIG_MACH_STAR)
+static struct gpio_switch_platform_data star_headset_data = {
+	.name = "h2w",
+    .gpio = 170,	//20100419  GPIO Index, not used for nVidia gpio
+};
+static struct platform_device star_headset_device = {
+	.name		= "star_headset",
+	.id		= -1,
+	.dev.platform_data = &star_headset_data,
+};
+#endif
+//20100419  headset detection [LGE_END]
+
+//LGE_UPDATE_S  2010-05-024 GPS UART & GPIO Setting
+static struct platform_device tegra_gps_gpio =
+{
+    .name = "tegra_gps_gpio",
+    .id   = -1,
+};
+//LGE_UPDATE_E  2010-05-024 GPS UART & GPIO Setting
+
+//20100704  jongik's headset porting [LGE_START]
+#if defined(CONFIG_MACH_STAR)
+static struct platform_device star_wm8994_pdevice =
+{
+	.name = "star_wm8994",
+	.id	  = -1,
+};
+#endif
+//20100704  jongik's headset porting [LGE_END]
+//20100701  crashdump [LGE_START]
+#if defined(CONFIG_ANDROID_RAM_CONSOLE)
+static struct resource ram_console_resource[] = {
+        {
+                .name = "ram_console",
+                .flags  = IORESOURCE_MEM,
+        }
+};
+
+static struct platform_device ram_console_device = {
+        .name = "ram_console",
+        .id = -1,
+        .num_resources  = ARRAY_SIZE(ram_console_resource),
+        .resource       = ram_console_resource,
+};
+#endif
+//20100701  crashdump  [LGE_END]
 
 static struct platform_device *nvodm_devices[] __initdata = {
 #ifdef CONFIG_RTC_DRV_TEGRA
@@ -1274,9 +1691,13 @@ static struct platform_device *nvodm_devices[] __initdata = {
 #ifdef CONFIG_TEGRA_NVEC
 	&tegra_nvec_device,
 #endif
-#if defined(CONFIG_TEGRA_BATTERY_NVEC) || defined(CONFIG_TEGRA_BATTERY_ODM)
+//20100527, , For Star Battery Driver [START]
+#if (defined(CONFIG_MACH_STAR) && defined(CONFIG_STAR_BATTERY_CHARGER))
+	&star_battery_charger_device,
+#elif defined(CONFIG_TEGRA_BATTERY_NVEC) || defined(CONFIG_TEGRA_BATTERY_ODM)
 	&tegra_battery_device,
-#endif
+#endif // CONFIG_MACH_STAR
+//20100527, , For Star Battery Driver [END]
 #ifdef CONFIG_REGULATOR_TEGRA
 	&tegra_regulator_device,
 #endif
@@ -1284,18 +1705,194 @@ static struct platform_device *nvodm_devices[] __initdata = {
 	&tegra_touch_device,
 #endif
 #ifdef CONFIG_INPUT_TEGRA_ODM_SCROLL
-	&tegra_scrollwheel_device,
+	//&tegra_scrollwheel_device,
 #endif
-#ifdef CONFIG_INPUT_TEGRA_ODM_ACCEL
+
+#ifdef CONFIG_STAR_GYRO_ACCEL
 	&tegra_accelerometer_device,
+	&tegra_gyro_accel_device,
 #endif
+
+#ifdef CONFIG_STAR_COMPASS
+	&star_compass_device,
+#endif
+
+/* Temp for sensor driver module */
+#ifdef CONFIG_STAR_SENSORS
+	&tegra_gyro_accel_device,
+	&tegra_accelerometer_device,
+	&star_compass_device,
+#endif
+/**/
+
+#ifdef CONFIG_TEGRA_ODM_VIBRATE
+//	&tegra_vibrator_device,
+#endif
+
+#ifdef CONFIG_STAR_VIBRATOR
+	&star_vib_device,
+#endif
+
+#ifdef CONFIG_STAR_HALL
+	&star_hall_device,
+#endif
+
+#if defined(CONFIG_STAR_MUIC) || defined(CONFIG_STAR_MUIC_TI)
+    	&star_muic_device,
+#endif
+#ifdef CONFIG_STAR_POWERKEY
+    &star_powerkey,
+#endif
+
+#ifdef CONFIG_STAR_PROXIMITY
+    	&star_proximity_device,
+#endif
+
+#ifdef CONFIG_STAR_TOUCH_LED
+    &star_touch_led,
+#endif
+
+#ifdef CONFIG_STAR_HDMI_REG
+    &star_hdmi_reg,
+#endif
+
+//20100419  for headset detection [LGE_START]
+#if defined(CONFIG_MACH_STAR)
+    &star_wm8994_pdevice,                       // 20110621
+#endif /* CONFIG_MACH_STAR */
+//20100419  for headset detection [LGE_END]
+
+//LGE_UPDATE_S  2010-05-024 GPS UART & GPIO Setting
+    &tegra_gps_gpio,
+//LGE_UPDATE_E  2010-05-024 GPS UART & GPIO Setting
+
+//20100704  jongik's wm8994 driver porting [LGE_START]
+#if defined(CONFIG_MACH_STAR)
+    &star_headset_device,                       // 20110621
+#endif /* CONFIG_MACH_STAR */
+//20100704  jongik's wm8994 driver porting [LGE_END]
+#if defined(CONFIG_ANDROID_RAM_CONSOLE)
+    &ram_console_device,
+#endif /* CONFIG_MACH_STAR */
+//20100830, , soft reset [START]
+#if defined(CONFIG_INPUT_KEYRESET)
+    &star_reset_keys_device,
+#endif
+//20100830, , soft reset [END]
+
+// 20101115 BT:  - For the BD Address Read /write [Start]
+	&star_bd_address_device,
+// 20101115 BT:  - For the BD Address Read /write [End]
+
 };
 
-#ifdef CONFIG_SPI_TEGRA
+//20100711-1, , add spi_ifxn721 [START]
+#if defined(CONFIG_SPI_TEGRA) && !defined(CONFIG_SPI_MDM6600)
+#include <linux/spi/spi.h>
+
+static struct spi_board_info tegra_spi_board_info[] __initdata = {
+    {
+        .modalias = "spi_ifxn721",
+        .bus_num = 1,
+        .chip_select = 0,
+        .mode = SPI_MODE_1,
+        .max_speed_hz = 24000000,
+//        .platform_data = NULL,//검토
+        .irq = 0,
+    },
+};
+static void __init tegra_register_ifxn721(void)
+{
+    NvError err;
+    NvRmGpioPinHandle hPin;
+    NvU32 irq;
+    NvU32 instance = 0xFFFF;
+    NvU32 cs = 0xFFF;
+	NvU32 pin = 0xFFFF, port = 0xFFFF;	//SPI_SRDY
+	NvU32 pin2 = 0xFFFF, port2 = 0xFFFF; //SPI_MRDY	//20100607, , Add spi_mrdy
+    const NvOdmPeripheralConnectivity *pConnectivity = NULL;
+    int i;
+    const NvOdmQuerySpiDeviceInfo *pSpiDeviceInfo;
+
+    pConnectivity =
+        NvOdmPeripheralGetGuid(NV_ODM_GUID('s','t','a','r','-','s','p','i'));	//20100607, , modify ifxn-721 -> star-spi
+	
+    if (!pConnectivity){
+	 printk("[tegra_spi]pConnectivity = %d \n", (int)pConnectivity);
+        return;
+    }
+
+    for (i = 0; i < pConnectivity->NumAddress; i++)
+    {
+        switch (pConnectivity->AddressList[i].Interface)
+        {
+            case NvOdmIoModule_Spi:
+                instance = pConnectivity->AddressList[i].Instance;
+                cs = pConnectivity->AddressList[i].Address;
+                break;
+            case NvOdmIoModule_Gpio:
+		if(pin==0xFFFF && port==0xFFFF)
+		{
+			   port = pConnectivity->AddressList[i].Instance;
+			   pin = pConnectivity->AddressList[i].Address;
+		}
+		else //20100607, , add spi_mrdy
+		{
+			   port2 = pConnectivity->AddressList[i].Instance;
+			   pin2 = pConnectivity->AddressList[i].Address;
+		}
+                break;
+            default:
+                break;
+        }
+    }
+
+    /* SPI ethernet driver needs one SPI info and a gpio for interrupt */
+    if (instance == 0xffff || cs == 0xffff || port == 0xFFFF || pin == 0xFFFF
+		|| port2 == 0xFFFF || pin2 == 0xFFFF){	//20100607, , add spi_mrdy
+	 printk("[tegra_spi]instance = %d, cs = %d, srdy[%d-%d], mrdy[%d-%d]\n", instance, cs, port, pin, port2, pin2);
+        return;
+    }
+
+    /* Check if the SPI is configured as a master for this instance
+     * If it it not, don't register the device.
+     * */
+    pSpiDeviceInfo = NvOdmQuerySpiGetDeviceInfo(NvOdmIoModule_Spi, instance, cs);
+    if (pSpiDeviceInfo && pSpiDeviceInfo->IsSlave)
+        return;
+
+#ifndef CONFIG_MACH_STAR_TMUS
+ //Set SRDY pin as interrupt 	
+    err = NvRmGpioAcquirePinHandle(s_hGpioGlobal, port, pin, &hPin);
+    if (err)
+    {
+        return;
+    }
+    NvRmGpioConfigPins(s_hGpioGlobal, &hPin, 1,
+        NvRmGpioPinMode_InputInterruptFallingEdge);
+    NvRmGpioGetIrqs(s_hRmGlobal, &hPin, &irq, 1);
+
+    printk("[tegra_spi]Register ifxn721 SPI driver\n");
+
+    tegra_spi_board_info[0].irq = irq; //SRDY
+#endif
+    /* FIXME, instance need not be same as bus number. */
+    tegra_spi_board_info[0].bus_num = instance;
+    tegra_spi_board_info[0].chip_select = cs;
+    spi_register_board_info(tegra_spi_board_info, ARRAY_SIZE(tegra_spi_board_info));
+}
+#endif /*CONFIG_SPI_TEGRA*/
+//20100711, , add spi_ifxn721 [END]
+
+#if defined(CONFIG_SPI_TEGRA) && !defined(CONFIG_SPI_SLAVE_TEGRA)
 static struct tegra_spi_platform_data tegra_spi_platform[] = {
 	[0] = {
+//20100711-1, , add pinmux [START]		
+		.pinmux = NvOdmSpiPinMap_Config1,
+//20100711, , add pinmux [END]
 		.is_slink = true,
 	},
+#if 0	
 	[1] = {
 		.is_slink = true,
 	},
@@ -1308,6 +1905,7 @@ static struct tegra_spi_platform_data tegra_spi_platform[] = {
 	[4] = {
 		.is_slink = false,
 	},
+#endif	
 };
 static struct platform_device tegra_spi_devices[] = {
 	[0] = {
@@ -1317,6 +1915,7 @@ static struct platform_device tegra_spi_devices[] = {
 			.platform_data = &tegra_spi_platform[0],
 		},
 	},
+#if 0
 	[1] = {
 		.name = "tegra_spi",
 		.id = 1,
@@ -1345,6 +1944,7 @@ static struct platform_device tegra_spi_devices[] = {
 			.platform_data = &tegra_spi_platform[4],
 		},
 	},
+#endif	
 };
 static noinline void __init tegra_setup_spi(void)
 {
@@ -1400,10 +2000,251 @@ static noinline void __init tegra_setup_spi(void)
 			       __func__, pdev->name, pdev->id);
 		}
 	}
+
+//20100711-1, , add spi_ifxn721 [START]
+	tegra_register_ifxn721();
+//20100711, , add spi_ifxn721 [END]
 }
 #else
 static void tegra_setup_spi(void) { }
 #endif
+
+//20100613-1, , add spi slave [START]
+#if defined(CONFIG_SPI_MDM6600)
+#include <linux/spi/spi.h>
+
+static struct spi_board_info tegra_spi_board_info[] __initdata = {
+    {
+        .modalias = "mdm6600",
+        .bus_num = 1,
+        .chip_select = 0,
+        .mode = SPI_MODE_1,
+        .max_speed_hz = 24000000,
+//        .platform_data = NULL,//검토 
+        .irq = 0,
+    },
+//20100809-1, , Add SPI2 for AP-CP IPC [START]
+#ifdef CONFIG_DUAL_SPI
+	{
+		.modalias = "mdm6600",
+		.bus_num = 2,
+		.chip_select = 0,
+		.mode = SPI_MODE_1,
+		.max_speed_hz = 24000000,
+//		  .platform_data = NULL,//검토 
+		.irq = 0,
+	},
+#endif
+//20100809, , Add SPI2 for AP-CP IPC [END]
+};
+
+static void __init register_mdm6600(void)
+{
+    NvError err;
+    NvRmGpioPinHandle hPin;
+    NvU32 irq;
+    NvU32 instance = 0xFFFF;
+    NvU32 cs = 0xFFF;
+	NvU32 pin[4] = {0xFFFF,0xFFFF,0xFFFF,0xFFFF};
+	NvU32 port[4] = {0xFFFF,0xFFFF,0xFFFF,0xFFFF};	//SPI_SRDY = pin[0], port[0] SPI_MRDY = pin[1],port[1]
+	//NvU32 pin2 = 0xFFFF, port2 = 0xFFFF; //SPI_MRDY
+    const NvOdmPeripheralConnectivity *pConnectivity = NULL;
+    int i =0;
+    const NvOdmQuerySpiDeviceInfo *pSpiDeviceInfo;
+	int id, pos = 0;
+
+    pConnectivity = NvOdmPeripheralGetGuid(NV_ODM_GUID('s','t','a','r','-','s','p','i'));
+    if (!pConnectivity)
+    {
+	printk("register_mdm6600 : pConnectivity is null!r\n");
+        return;
+    }
+	
+	for(id=0 ; id < ARRAY_SIZE(tegra_spi_board_info) ;id++)
+	{
+		printk("%s#%d : i = %d\n", __FUNCTION__, id, i);
+		pos = 0;
+	    for ( ; i < (id+1)*(pConnectivity->NumAddress/ARRAY_SIZE(tegra_spi_board_info)) ; i++)
+    {
+        switch (pConnectivity->AddressList[i].Interface)
+        {
+            case NvOdmIoModule_Spi:
+                instance = pConnectivity->AddressList[i].Instance;
+                cs = pConnectivity->AddressList[i].Address;
+                break;
+            case NvOdmIoModule_Gpio:
+			   port[pos] = pConnectivity->AddressList[i].Instance;
+			   pin[pos] = pConnectivity->AddressList[i].Address;
+			   pos++;
+                break;
+            default:
+                break;
+        }
+    }
+
+    /* SPI ethernet driver needs one SPI info and a gpio for interrupt */
+	    if (instance == 0xffff || cs == 0xffff || port[0] == 0xFFFF || pin[0] == 0xFFFF)
+    {
+		 printk("%s#%d : instance = %d, cs = %d, port2 = %d, pin2 = %dr\n", __FUNCTION__, id, instance, cs, port[0], pin[0]);
+        return;
+    }
+	/* Check if the SPI is configured as a master for this instance
+	* If it it not, don't register the device.
+	* */
+	pSpiDeviceInfo = NvOdmQuerySpiGetDeviceInfo(NvOdmIoModule_Spi, instance, cs);
+		printk("%s#%d : instance = %d, cs = %d\n",__FUNCTION__, id, instance, cs);
+//20100613-1, , add spi slave mode [START]
+	if (pSpiDeviceInfo && pSpiDeviceInfo->IsSlave)
+	{	//slave mode ; mrdy pin works as interrupt
+#ifndef CONFIG_MACH_STAR_TMUS
+			err = NvRmGpioAcquirePinHandle(s_hGpioGlobal, port[0], pin[0], &hPin);
+		if (err)
+		{
+				printk("%s#%d : can't open pin handle\n", __FUNCTION__, id);
+		    	return;
+		}
+		NvRmGpioConfigPins(s_hGpioGlobal, &hPin, 1, NvRmGpioPinMode_InputInterruptFallingEdge);
+		NvRmGpioGetIrqs(s_hRmGlobal, &hPin, &irq, 1);
+			tegra_spi_board_info[id].irq = irq; //SRDY
+#endif
+		/* FIXME, instance need not be same as bus number. */
+			tegra_spi_board_info[id].bus_num = instance;
+			tegra_spi_board_info[id].chip_select = cs;
+			printk("%s#%d : irq = %d, instance = %d, cs = %d\n", __FUNCTION__, id, irq, instance, cs);
+	}
+	else
+	{
+			printk("%s#%d : spi is master\n", __FUNCTION__, id);
+		return;
+	}	
+	}
+	
+	printk("Enabled SPI slave driver\n");
+	spi_register_board_info(tegra_spi_board_info, ARRAY_SIZE(tegra_spi_board_info));
+}
+#endif /*CONFIG_SPI_MDM6600*/
+//20100613-1, , add spi slave [END]
+
+
+//20100613-1, , add spi slave [START]
+#if !defined(CONFIG_SPI_SLAVE_TEGRA) 
+#define tegra_setup_spi_slave() do {} while (0)
+#else
+static struct tegra_spi_platform_data tegra_spi_platform[] = {
+	[0] = {
+		.is_slink = true,
+	},
+	[1] = {
+		.is_slink = true,
+	},
+	[2] = {
+		.is_slink = true,
+	},
+	[3] = {
+		.is_slink = true,
+	},
+	[4] = {
+		.is_slink = false,
+	},
+};
+
+static struct platform_device tegra_spi_devices[] = {
+	[0] = {
+		.name = "tegra_spi",
+		.id = 0,
+		.dev = {
+			.platform_data = &tegra_spi_platform[0],
+		},
+	},
+	[1] = {
+		.name = "tegra_spi",
+		.id = 1,
+		.dev = {
+			.platform_data = &tegra_spi_platform[1],
+		},
+	},
+	[2] = {
+		.name = "tegra_spi",
+		.id = 2,
+		.dev = {
+			.platform_data = &tegra_spi_platform[2],
+		},
+	},
+	[3] = {
+		.name = "tegra_spi",
+		.id = 3,
+		.dev = {
+			.platform_data = &tegra_spi_platform[3],
+		},
+	},
+	[4] = {
+		.name = "tegra_spi",
+		.id = 4,
+		.dev = {
+			.platform_data = &tegra_spi_platform[4],
+		},
+	},
+};
+
+static noinline void __init tegra_setup_spi_slave(void)
+{
+	const NvU32 *spi_mux;
+	const NvU32 *sflash_mux;
+	NvU32 spi_mux_nr;
+	NvU32 sflash_mux_nr;
+	int i;
+
+	NvOdmQueryPinMux(NvOdmIoModule_Spi, &spi_mux, &spi_mux_nr);
+	NvOdmQueryPinMux(NvOdmIoModule_Sflash, &sflash_mux, &sflash_mux_nr);
+
+	for (i=0; i<ARRAY_SIZE(tegra_spi_devices); i++) {
+		struct platform_device *pdev = &tegra_spi_devices[i];
+		struct tegra_spi_platform_data *plat = &tegra_spi_platform[i];
+
+		const NvOdmQuerySpiDeviceInfo *info = NULL;
+		NvU32 mux = 0;
+		int rc;
+
+		if (plat->is_slink && pdev->id<spi_mux_nr)
+			mux = spi_mux[pdev->id];
+		else if (sflash_mux_nr && !plat->is_slink)
+			mux = sflash_mux[0];
+
+		if (!mux)
+			continue;
+
+		if (mux == NVODM_QUERY_PINMAP_MULTIPLEXED) {
+			pr_err("%s: not registering multiplexed SPI master "
+			       "%s.%d\n", __func__, pdev->name, pdev->id);
+			WARN_ON(1);
+			continue;
+		}
+
+		if (plat->is_slink) {
+			info = NvOdmQuerySpiGetDeviceInfo(NvOdmIoModule_Spi, pdev->id, 0);
+		} else {
+			info = NvOdmQuerySpiGetDeviceInfo(NvOdmIoModule_Sflash, 0, 0);
+		}
+
+		if (info && info->IsSlave!=NV_TRUE) {
+			pr_info("%s: not registering SPI master %s.%d\n",
+				__func__, pdev->name, pdev->id);
+			continue;
+		}
+
+		rc = platform_device_register(pdev);
+		if (rc) {
+			pr_err("%s: registration of %s.%d failed\n",
+			       __func__, pdev->name, pdev->id);
+		}
+	}
+
+//20100711-1, , add spi_ifxn721 [START]
+	register_mdm6600();
+//20100711, , add spi_ifxn721 [END]
+}
+#endif	//CONFIG_SPI_SLAVE_TEGRA
+//20100613, , add spi slave [END]
 
 #ifdef CONFIG_I2C_TEGRA
 #ifdef CONFIG_TEGRA_ODM_VENTANA
@@ -1499,6 +2340,153 @@ static struct platform_device tegra_i2c_devices[] = {
 		},
 	},
 };
+
+
+static NvBool sensor_poweron()
+{
+
+	NvU32 mvolt_ldo7, mvolt_ldo8;
+	NvU32 settletime;
+	int retry = 0;
+	printk("sensor poweron\n");
+	NvOdmServicesPmuHandle h_pmu = NvOdmServicesPmuOpen();
+	if (!h_pmu)
+	{ 
+		printk("sensor pmu handle fail!\n");
+		return NV_FALSE;
+	}
+
+	do {
+
+		NvOdmServicesPmuSetVoltage( h_pmu, Max8907PmuSupply_LDO7 , NVODM_VOLTAGE_OFF, &settletime);
+		NvOdmOsWaitUS(settletime);
+
+		NvOdmServicesPmuSetVoltage( h_pmu, Max8907PmuSupply_LDO8 , NVODM_VOLTAGE_OFF, &settletime);
+		NvOdmOsWaitUS(settletime);
+
+		NvOdmServicesPmuGetVoltage(h_pmu, Max8907PmuSupply_LDO7, &mvolt_ldo7);
+		NvOdmServicesPmuGetVoltage(h_pmu, Max8907PmuSupply_LDO7, &mvolt_ldo8);
+
+		printk("LDO7 = %dmV, LDO8 = %dmV\n", mvolt_ldo7, mvolt_ldo8);
+		retry++;
+		if (retry > 10) 
+		{ 
+			printk("sensor power control off fail!\n");
+	                NvOdmServicesPmuClose(h_pmu);
+			return NV_FALSE;
+		}
+
+
+	} while ( mvolt_ldo7 !=0 || mvolt_ldo8  != 0 );
+
+	msleep(3000);
+	
+        do {
+
+		NvOdmServicesPmuSetVoltage( h_pmu, Max8907PmuSupply_LDO7 , 3000, &settletime);
+		NvOdmOsWaitUS(settletime);
+
+		NvOdmServicesPmuSetVoltage( h_pmu, Max8907PmuSupply_LDO8 , 1800, &settletime);
+		NvOdmOsWaitUS(settletime);
+
+		NvOdmServicesPmuGetVoltage(h_pmu, Max8907PmuSupply_LDO7, &mvolt_ldo7);
+		NvOdmServicesPmuGetVoltage(h_pmu, Max8907PmuSupply_LDO8, &mvolt_ldo8);
+
+		printk("LDO7 = %dmV, LDO8 = %dmV\n", mvolt_ldo7, mvolt_ldo8);
+		retry++;
+		if (retry > 10) 
+		{ 
+			printk("sensor power control on fail!\n");
+	                NvOdmServicesPmuClose(h_pmu);
+			return NV_FALSE;
+		}
+
+
+	} while ( mvolt_ldo7 ==0 || mvolt_ldo8  == 0 );
+
+
+	NvOdmOsWaitUS(10);
+
+	NvOdmServicesPmuClose(h_pmu);
+	return NV_TRUE;
+}
+
+
+static void sensor_workaround()
+{
+
+#define GEN2_I2C_SCL 't' - 'a', 5
+#define GEN2_I2C_SDA 't' - 'a', 6
+#define HALL_INT 'u' - 'a', 5
+#define COM_INT 'r' -'a', 4
+#define GYRO_INT_N 'q' - 'a' , 5
+#define MOTION_INT 'i' -'a', 0
+#define PROXI_OUT 'w' - 'a', 2
+       
+	NvOdmServicesGpioHandle hGpio;
+	NvOdmGpioPinHandle hSclGpioPinHandle;
+	NvOdmGpioPinHandle hSdaGpioPinHandle;
+	NvOdmGpioPinHandle hHalGpioPinHandle;
+	NvOdmGpioPinHandle hComGpioPinHandle;
+	NvOdmGpioPinHandle hGyrGpioPinHandle;
+	NvOdmGpioPinHandle hMotGpioPinHandle;
+	NvOdmGpioPinHandle hProGpioPinHandle;
+
+	hGpio = NvOdmGpioOpen();
+
+	if (!hGpio)
+	{
+		printk("%s: NvOdmGpioOpen Error \n", __func__);
+		goto error_open_gpio_fail;
+	}
+
+	hSclGpioPinHandle = NvOdmGpioAcquirePinHandle(hGpio, GEN2_I2C_SCL);
+	hSdaGpioPinHandle = NvOdmGpioAcquirePinHandle(hGpio, GEN2_I2C_SDA);  
+	hHalGpioPinHandle = NvOdmGpioAcquirePinHandle(hGpio, HALL_INT);  
+	hComGpioPinHandle = NvOdmGpioAcquirePinHandle(hGpio, COM_INT);
+	hGyrGpioPinHandle = NvOdmGpioAcquirePinHandle(hGpio, GYRO_INT_N);
+	hMotGpioPinHandle = NvOdmGpioAcquirePinHandle(hGpio, MOTION_INT);
+	hProGpioPinHandle = NvOdmGpioAcquirePinHandle(hGpio, PROXI_OUT);
+
+         if (!hSclGpioPinHandle ||
+	     !hSdaGpioPinHandle ||
+	     !hHalGpioPinHandle ||
+	     !hComGpioPinHandle ||
+	     !hGyrGpioPinHandle ||
+	     !hMotGpioPinHandle ||
+	     !hProGpioPinHandle ) 
+         {
+                 printk("%s: Couldn't NvOdmGpioAcquirePinHandle  pin \n", __func__);
+                 goto error_open_gpio_pin_acquire_fail;
+         }  
+
+	NvOdmGpioSetState(hGpio,hSclGpioPinHandle , 0x0); NvOdmGpioConfig(hGpio, hSclGpioPinHandle, 5 );
+	NvOdmGpioSetState(hGpio,hSdaGpioPinHandle , 0x0); NvOdmGpioConfig(hGpio, hSdaGpioPinHandle, 5 );
+	NvOdmGpioSetState(hGpio,hHalGpioPinHandle , 0x0); NvOdmGpioConfig(hGpio, hHalGpioPinHandle, 5 );
+	NvOdmGpioSetState(hGpio,hComGpioPinHandle , 0x0); NvOdmGpioConfig(hGpio, hComGpioPinHandle, 5 );
+	NvOdmGpioSetState(hGpio,hGyrGpioPinHandle , 0x0); NvOdmGpioConfig(hGpio, hGyrGpioPinHandle, 5 );
+	NvOdmGpioSetState(hGpio,hMotGpioPinHandle , 0x0); NvOdmGpioConfig(hGpio, hMotGpioPinHandle, 5 );
+	NvOdmGpioSetState(hGpio,hProGpioPinHandle , 0x0); NvOdmGpioConfig(hGpio, hProGpioPinHandle, 5 );
+
+       if (!sensor_poweron())
+       {
+          printk("%s: sensor_poweron() fail \n", __func__);
+       }
+
+done:
+ 
+error_open_gpio_pin_acquire_fail:
+	NvOdmGpioReleasePinHandle(hGpio,hSclGpioPinHandle);
+	NvOdmGpioReleasePinHandle(hGpio,hSdaGpioPinHandle);
+	NvOdmGpioReleasePinHandle(hGpio,hHalGpioPinHandle); 
+	NvOdmGpioReleasePinHandle(hGpio,hComGpioPinHandle);
+	NvOdmGpioReleasePinHandle(hGpio,hGyrGpioPinHandle);
+	NvOdmGpioReleasePinHandle(hGpio,hMotGpioPinHandle);
+	NvOdmGpioReleasePinHandle(hGpio,hProGpioPinHandle);
+error_open_gpio_fail:
+        NvOdmGpioClose(hGpio);
+}
+
 static noinline void __init tegra_setup_i2c(void)
 {
 	const NvOdmPeripheralConnectivity *smbus;
@@ -1512,6 +2500,8 @@ static noinline void __init tegra_setup_i2c(void)
 	NvU32 odm_mux_i2cp_nr;
 	NvU32 odm_clk_i2cp_nr;
 	int i;
+
+        sensor_workaround();
 
 	smbus = NvOdmPeripheralGetGuid(NV_ODM_GUID('I','2','c','S','m','B','u','s'));
 
@@ -1565,7 +2555,7 @@ static noinline void __init tegra_setup_i2c(void)
 		if (mux == NVODM_QUERY_PINMAP_MULTIPLEXED) {
 			pr_err("%s: unable to register %s.%d (multiplexed)\n",
 			       __func__, dev->name, dev->id);
-			WARN_ON(1);
+			//WARN_ON(1);
 			continue;
 		}
 #endif
@@ -1633,9 +2623,61 @@ static int tegra_setup_pcie(void)
 late_initcall(tegra_setup_pcie);
 #endif
 
+//20100724  for poweroff leakage [LGE_START]
+#define MAX_COUNT 10
+void tegra_voltage_off( NvU32 vddId )
+{
+	int count=0;
+	u32 settling_time;
+    NvU32 millivolts=1;
+
+	NvRmPmuGetVoltage(s_hRmGlobal, vddId, &millivolts);
+	pr_info("[POWER] %s: LOD=%d : millivolts=%d (before control) !!	\n", __func__, vddId-4, millivolts);
+	
+	while( count < MAX_COUNT && millivolts!=0)
+	{
+		NvRmPmuSetVoltage(s_hRmGlobal, vddId, NVODM_VOLTAGE_OFF, &settling_time);
+		udelay(settling_time);
+		NvRmPmuGetVoltage(s_hRmGlobal, vddId, &millivolts);
+		count=count+1;
+	}
+	
+	if ( millivolts != 0 )
+	{
+		pr_info("[POWER] %s: LOD=%d (count=%d) Fail !!	\n", __func__, vddId-4, count);
+	}
+	else
+	{
+		pr_info("[POWER] %s: LOD=%d (count=%d) success !!	\n", __func__, vddId-4, count);
+	}
+}
+//20100724  for poweroff leakage [LGE_END]
+
 static void tegra_system_power_off(void)
 {
 	struct regulator *regulator = regulator_get(NULL, "soc_main");
+	printk("tegra_system_power_off\n");
+
+//20100724  for poweroff leakage [LGE_START]
+    #if 0
+	u32 settling_time;
+
+	pr_info("[POWER] %s: start !!  \n",	__func__);
+
+	NvRmPmuSetVoltage(s_hRmGlobal, Max8907PmuSupply_LDO5, 2800, &settling_time);
+	udelay(settling_time);
+	tegra_voltage_off(Max8907PmuSupply_LDO7);
+	tegra_voltage_off(Max8907PmuSupply_LDO8);
+	tegra_voltage_off(Max8907PmuSupply_LDO12);
+	tegra_voltage_off(Max8907PmuSupply_LDO13);
+	tegra_voltage_off(Max8907PmuSupply_LDO14);	
+	tegra_voltage_off(Max8907PmuSupply_LDO18);
+	tegra_voltage_off(Max8907PmuSupply_LDO3);
+	tegra_voltage_off(Max8907PmuSupply_LDO4);
+	tegra_voltage_off(Max8907PmuSupply_LDO5);	
+    #endif
+//20100724  for poweroff leakage [LGE_END]
+
 
 	if (!IS_ERR(regulator)) {
 		int rc;
@@ -1676,6 +2718,7 @@ static void __init tegra_setup_suspend(void)
 		gpio_to_irq(TEGRA_GPIO_PS4), gpio_to_irq(TEGRA_GPIO_PS5),
 		INT_SDMMC2, gpio_to_irq(TEGRA_GPIO_PQ6),
 		gpio_to_irq(TEGRA_GPIO_PQ7), gpio_to_irq(TEGRA_GPIO_PN2),
+		gpio_to_irq(TEGRA_GPIO_PG0), gpio_to_irq(TEGRA_GPIO_PG1),
 	};
 #endif
 	const NvOdmWakeupPadInfo *w;
@@ -1752,14 +2795,65 @@ static void __init tegra_setup_suspend(void)
 		w++;
 	}
 
+//20101117, cs77.ha@lge.com, gpio wakeup from LP1 [START]
+#if defined(CONFIG_MACH_STAR)    
+        // GPIO wakeup when entering LP1
+#if defined(CONFIG_MACH_STAR_MDM_C)
+	enable_irq_wake(gpio_to_irq(TEGRA_GPIO_PR2));  //proxi
+#else
+        enable_irq_wake(gpio_to_irq(TEGRA_GPIO_PW2));  //proxi
+#endif
+        enable_irq_wake(gpio_to_irq(TEGRA_GPIO_PG3));   //earjack sensor
+        enable_irq_wake(gpio_to_irq(TEGRA_GPIO_PD3));   //hook detect
+        enable_irq_wake(gpio_to_irq(TEGRA_GPIO_PG0));   //vol-up
+        enable_irq_wake(gpio_to_irq(TEGRA_GPIO_PG1));   //vol-down
+#endif
+//20101117, cs77, gpio wakeup from LP1 [END]
+
+
 do_register:
 	tegra_init_suspend(plat);
 	tegra_init_idle(plat);
 }
 
+#if defined (CONIFG_MACH_STAR)
+extern void write_cmd_reserved_buffer(unsigned char *buf, size_t len);
+#endif
+
 static int tegra_reboot_notify(struct notifier_block *nb,
 				unsigned long event, void *data)
 {
+
+#if defined (CONFIG_MACH_STAR)
+        unsigned char tmpbuf[2];
+      
+	if(data)
+	{
+	    printk("tegra_reboot_notify : data = %s\n", (unsigned char *)data);
+		memcpy(tmpbuf, (unsigned char*) data,2);
+	}	
+	else
+	{
+		tmpbuf[0] ='w';
+	}	
+
+        switch (tmpbuf[0])
+        {
+          case 'w':
+          break;
+#if defined (CONFIG_STAR_HIDDEN_RESET)
+          case 'h':
+          break;
+#endif
+          case 'p':
+          break;
+
+          default:
+          tmpbuf[0] ='w';
+          break;
+        }
+	write_cmd_reserved_buffer(tmpbuf,1);
+#endif
 	switch (event) {
 	case SYS_RESTART:
 	case SYS_HALT:
@@ -1777,12 +2871,90 @@ static struct notifier_block tegra_reboot_nb = {
 	.priority = 0
 };
 
+
+#if defined (CONFIG_MACH_STAR)
+extern void write_cmd_reserved_buffer(unsigned char *buf, size_t len);
+
+static int star_panic_event(struct notifier_block *this,
+			       unsigned long event, void *ptr)
+{
+	return NOTIFY_DONE;
+}
+
+void star_shutdown_prepare()
+{
+
+
+#define MDM_POWER_ON 't' - 'a', 1
+#define MDM_RESET 't' - 'a', 0
+
+	NvOdmServicesGpioHandle hGpio;
+	NvOdmGpioPinHandle hMDM_Power_On_GpioPinHandle;
+	NvOdmGpioPinHandle hMDM_Reset_GpioPinHandle;
+
+	NvOdmServicesPmuHandle h_pmu = NvOdmServicesPmuOpen();
+
+	printk("star_shutdown_prepare : NvRMPrivDvsStop\n");
+	NvRmPrivDvsStop();
+
+	if (h_pmu)
+	{
+
+		printk("star_shutdown_prepare : pmic i2c shutdown\n");
+		NvOdmServicesPmuSetVoltage( h_pmu, Max8907PmuSupply_Stop_i2c_Flag, 1UL, NULL );
+	}
+	else
+	{
+		printk("star_shutdown_prepare : sensor pmu handle fail!\n");
+	}
+	
+	 hGpio = NvOdmGpioOpen();
+     hMDM_Power_On_GpioPinHandle = NvOdmGpioAcquirePinHandle(hGpio, MDM_POWER_ON);
+	 hMDM_Reset_GpioPinHandle = NvOdmGpioAcquirePinHandle(hGpio, MDM_RESET);
+
+	 NvOdmGpioSetState(hGpio,hMDM_Power_On_GpioPinHandle , 0x0); 
+	 NvOdmGpioConfig(hGpio, hMDM_Power_On_GpioPinHandle, 5 );
+
+     NvOdmGpioSetState(hGpio,hMDM_Reset_GpioPinHandle , 0x0); 
+     NvOdmGpioConfig(hGpio, hMDM_Reset_GpioPinHandle, 5 );
+	 
+     NvOdmGpioClose(hGpio);
+	
+}
+
+EXPORT_SYMBOL_GPL(star_shutdown_prepare);
+
+
+static void star_power_off_prepare()
+{
+    struct timespec ts;
+	struct rtc_time tm;
+	getnstimeofday(&ts);
+	rtc_time_to_tm(ts.tv_sec, &tm);
+
+	pr_info("star_power_off_prepare: at %lld "
+		"(%d-%02d-%02d %02d:%02d:%02d.%09lu UTC)\n",
+		ktime_to_ns(ktime_get()),
+		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+		tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec);
+
+}
+
+struct notifier_block star_panic_nb = {
+	.notifier_call = star_panic_event,
+};
+#endif
+
 static void __init tegra_setup_reboot(void)
 {
 	int rc = register_reboot_notifier(&tegra_reboot_nb);
 	if (rc)
 		pr_err("%s: failed to regsiter platform reboot notifier\n",
 			__func__);
+#if defined (CONFIG_MACH_STAR)
+        atomic_notifier_chain_register(&panic_notifier_list, & star_panic_nb);
+#endif
+
 }
 
 static int __init tegra_setup_data(void)
@@ -1815,6 +2987,11 @@ void __init tegra_setup_nvodm(bool standard_i2c, bool standard_spi)
 		tegra_setup_i2c();
 	if (standard_spi)
 		tegra_setup_spi();
+//20100613-1, , add spi slave [START]
+#if defined(CONFIG_SPI_SLAVE_TEGRA) 
+	tegra_setup_spi_slave();
+#endif
+//20100613-1, , add spi slave [END]
 #if	defined(CONFIG_TOUCHSCREEN_PANJIT_I2C) && \
 	defined(CONFIG_TOUCHSCREEN_ATMEL_MT_T9)
 #define NVODM_ATMEL_TOUCHSCREEN    0x0A00
@@ -1840,7 +3017,14 @@ void __init tegra_setup_nvodm(bool standard_i2c, bool standard_spi)
 #elif defined(CONFIG_TOUCHSCREEN_PANJIT_I2C)
 	ventana_touch_init_panjit();
 #endif
+#ifdef CONFIG_TOUCHSCREEN_ANDROID_VIRTUALKEYS
+	star_init_android_virtualkeys();
+#endif
+	tegra_emc_write_mrw(9);
 	tegra_setup_w1();
+#if defined (CONFIG_MACH_STAR)
+	pm_power_off_prepare = star_power_off_prepare;
+#endif
 	pm_power_off = tegra_system_power_off;
 	tegra_setup_suspend();
 	tegra_setup_reboot();
@@ -1865,3 +3049,67 @@ void tegra_board_nvodm_resume(void)
         tegra_pinmux_set_pullupdown(TEGRA_PINGROUP_SDD, TEGRA_PUPD_PULL_UP);
 #endif
 }
+
+void __init tegra_allocate_memory_regions(void)
+{
+#ifdef CONFIG_ANDROID_RAM_CONSOLE
+	struct membank *bank = &meminfo.bank[0];
+
+	pr_info("first bank start=%08llx, size=%5lu kB\n", (long long)bank->start, bank->size >> 10);
+
+	ram_console_resource[0].start = bank->start + bank->size;
+	ram_console_resource[0].end = ram_console_resource[0].start + STAR_RAM_CONSOLE_SIZE - 1;
+
+	pr_info("allocating %05x kB at 0x%08lx for ram_console\n",
+		STAR_RAM_CONSOLE_SIZE >> 10, ram_console_resource[0].start);
+#endif
+}
+
+#if defined(CONFIG_MACH_STAR) && defined(CONFIG_ANDROID_RAM_CONSOLE)
+void *reserved_buffer;
+
+static int __init init_reserved_buffer(void)
+{
+	size_t start;
+
+	start = ram_console_resource[0].end + 1;
+	reserved_buffer = ioremap(start, RAM_RESERVED_SIZE);
+	pr_info("%s: reserved_buffer virtual = 0x%08lx\n", __func__, reserved_buffer);
+	pr_info("%s: reserved_buffer physical= 0x%08lx\n", __func__, start);
+
+	return 0;
+}
+postcore_initcall(init_reserved_buffer);
+
+void write_cmd_reserved_buffer(unsigned char *buf, size_t len)
+{
+	memcpy(reserved_buffer, buf, len);
+}
+
+void read_cmd_reserved_buffer(unsigned char *buf, size_t len)
+{
+	memcpy(buf, reserved_buffer, len);
+}
+
+EXPORT_SYMBOL_GPL(write_cmd_reserved_buffer);
+EXPORT_SYMBOL_GPL(read_cmd_reserved_buffer);
+
+#if defined (CONFIG_STAR_HIDDEN_RESET)
+void write_screen_shot_reserved_buffer(unsigned char *buf, size_t len)
+{
+	printk("write_screen_shot_reserved_buffer address =%x + 32\n", reserved_buffer);
+
+	copy_from_user(reserved_buffer + 32, buf, 800*480*3);
+	//memcpy(reserved_buffer+32, buf, 800*480*3);
+}
+
+void read_screen_shot_reserved_buffer(unsigned char *buf, size_t len)
+{
+        copy_to_user(buf, reserved_buffer + 32, 800*480*3);
+	//memcpy(buf, reserved_buffer+32, 800*480*3);
+}
+
+EXPORT_SYMBOL_GPL(write_screen_shot_reserved_buffer);
+EXPORT_SYMBOL_GPL(read_screen_shot_reserved_buffer);
+#endif
+#endif

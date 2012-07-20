@@ -49,6 +49,8 @@
 #define N_V253		19	/* Codec control over voice modem */
 #define N_CAIF		20      /* CAIF protocol for talking to modems */
 #define N_GSM0710	21	/* GSM 0710 Mux */
+#define N_TS0710	20      /* Gsm0710 multiplexer */
+#define N_RIN		21      /* Raw IP Network, vsnet */ 
 #define N_TI_WL		22	/* for TI's WL BT, FM, GPS combo chips */
 #define N_TRACESINK	23	/* Trace data routing for MIPI P1149.7 */
 #define N_TRACEROUTER	24	/* Trace data routing for MIPI P1149.7 */
@@ -294,7 +296,15 @@ struct tty_struct {
 	void *driver_data;
 	struct list_head tty_files;
 
+#ifdef CONFIG_MACH_STAR_TMUS
+//LGE_TELECA_CR:707_DATA_THROUGHPUT START
+//LGE_TELECA_CR:1056_SPI/MUX_IMPROVEMENT START
+#define N_TTY_BUF_SIZE 32768
+//LGE_TELECA_CR:1056_SPI/MUX_IMPROVEMENT END
+//LGE_TELECA_CR:707_DATA_THROUGHPUT END
+#else
 #define N_TTY_BUF_SIZE 4096
+#endif
 
 	/*
 	 * The following is data for the N_TTY line discipline.  For
@@ -472,7 +482,9 @@ extern void proc_clear_tty(struct task_struct *p);
 extern struct tty_struct *get_current_tty(void);
 extern void tty_default_fops(struct file_operations *fops);
 extern struct tty_struct *alloc_tty_struct(void);
-extern int tty_add_file(struct tty_struct *tty, struct file *file);
+extern int tty_alloc_file(struct file *file);
+extern void tty_add_file(struct tty_struct *tty, struct file *file);
+extern void tty_free_file(struct file *file);
 extern void free_tty_struct(struct tty_struct *tty);
 extern void initialize_tty_struct(struct tty_struct *tty,
 		struct tty_driver *driver, int idx);

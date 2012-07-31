@@ -37,6 +37,8 @@ obj-$(CONFIG_LOGGER)		+= logger.o
 
 obj-$(CONFIG_STAR_WM8994_TEST)	+= star_wm8994.o
 
+# Voodoo Sound
+obj-$(CONFIG_STAR_WM8994_VOODOO)	+= star_wm8994_voodoo.o
 #20100827, 
 obj-$(CONFIG_STAR_GYRO_ACCEL)	+= sensor/
 obj-$(CONFIG_STAR_COMPASS)		+= sensor/
@@ -72,3 +74,4 @@ obj-$(CONFIG_STAR_FOTA)	+= star_fota.o
 #
 obj-$(CONFIG_STAR_BD_ADDRESS)	+= star_bd_address.o
 obj-$(CONFIG_STAR_VIBRATOR)	+= star_vib.o
+obj-$(CONFIG_FORCE_FAST_CHARGE)         += fastchg.o
